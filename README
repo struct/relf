@@ -1,0 +1,3 @@
+RElf is a class for parsing ELF (Executable Linkable Format) in Ruby. It uses http://github.com/tqbf/ruckus
+
+It's maybe 1/2 done - YMMV
