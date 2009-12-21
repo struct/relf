@@ -38,7 +38,8 @@ class RELF
 			@elf_file = elf_file
 			@dat = File.read(elf_file)
 		rescue
-			bail "Could not read [ #{elf_file} ]"
+			puts "Could not read [ #{elf_file} ]"
+			exit
 		end
 
 		@phdr = Array.new
