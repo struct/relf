@@ -30,7 +30,7 @@ require 'ruckus'
 
 class RELF
 
-	attr_accessor :dat, :ehdr, :phdr, :shdr, :dyn, :strtab, :hash, :gnu_hash, :symtab, :syment, :symbols
+	attr_accessor :dat, :ehdr, :phdr, :shdr, :dyn, :strtab, :hash, :gnu_hash, :dynsym, :symtab, :syment, :symbols
 
 	def initialize(elf_file)
 		begin	
@@ -44,6 +44,7 @@ class RELF
 		@phdr = Array.new
 		@shdr = Array.new
 		@dyn  = Array.new
+		@symbols = Array.new
 
 		parse_ehdr
 		parse_phdr
@@ -160,7 +161,7 @@ class RELF
 		@strtab = ELFSectionHeader.new
 		@hash = ELFSectionHeader.new
 		@gnu_hash = ELFSectionHeader.new
-		@symtab = ELFSectionHeader.new
+		@dynsym = ELFSectionHeader.new
 		@syment = 0
 
 		0.upto(p.p_filesz.to_i / d.size.to_i) do |j|
@@ -203,10 +204,10 @@ class RELF
 =end
 				when DynamicTypes::DT_SYMTAB
 					if ehdr.e_type.to_i == ELFTypes::ET_EXEC
-						symtab.sh_offset = d.d_val.to_i - BASEADDR
+						dynsym.sh_offset = d.d_val.to_i - BASEADDR
 					end
 					if ehdr.e_type.to_i == ELFTypes::ET_DYN
-						symtab.sh_offset = d.d_val.to_i
+						dynsym.sh_offset = d.d_val.to_i
 					end
 			end # case statement
 
@@ -222,17 +223,20 @@ class RELF
 		end
 	end
 
-	def parse_symbols
-		@symbols = Array.new
-		@symtab = get_shdr(ShdrTypes::SHT_DYNSYM)
+	def parse_dynsym
+		@dynsym = get_shdr(ShdrTypes::SHT_DYNSYM)
 
-		num_of_symbols = (@symtab.sh_size.to_i / @syment)	# this works for now
+		if !@dynsym.kind_of? ELFSectionHeader
+			return
+		end
+
+		num_of_symbols = (@dynsym.sh_size.to_i / @syment)
 		#num_of_symbols = dat[hash.sh_offset + 4] # see comment parsing dt_symtab
 
 		0.upto(num_of_symbols.to_i-1) do |j|
 			sym = ELFSymbol.new
 			f = get_file
-			sym.capture(f[symtab.sh_offset.to_i + (j * sym.size), sym.size])
+			sym.capture(f[dynsym.sh_offset.to_i + (j * sym.size), sym.size])
 			f = get_file
 			str = f[strtab.sh_offset.to_i + sym.st_name.to_i, 256]
 
@@ -244,10 +248,43 @@ class RELF
 		end
 	end
 
-	def get_symbol_name(sym)
+	def parse_symtab
+		@symtab = get_shdr(ShdrTypes::SHT_SYMTAB)
+
+		if !@symtab.kind_of? ELFSectionHeader
+			return
+		end
+
+	 	@sym_str_tbl = shdr[@symtab.sh_link.to_i]
+
+		num_of_symbols = (@symtab.sh_size.to_i / @syment)
+		#num_of_symbols = dat[hash.sh_offset + 4] # see comment parsing dt_symtab
+
+		0.upto(num_of_symbols.to_i-1) do |j|
+			sym = ELFSymbol.new
+			f = get_file
+			sym.capture(f[symtab.sh_offset.to_i + (j * sym.size), sym.size])
+			f = get_file
+			str = f[@sym_str_tbl.sh_offset.to_i + sym.st_name.to_i, 256]
+
+			if block_given?
+				yield(sym)
+			end
+
+			symbols.push(sym)
+		end
+	end
+
+	def get_dyn_symbol_name(sym)
 		f = get_file
 		str = f[strtab.sh_offset.to_i + sym.st_name.to_i, 256]
-		str = str[0, str.index("\x00")]# = sym.st_value.to_i
+		str = str[0, str.index("\x00")]
+	end
+
+	def get_sym_symbol_name(sym)
+		f = get_file
+		str = f[@sym_str_tbl.sh_offset.to_i + sym.st_name.to_i, 256]
+		str = str[0, str.index("\x00")]
 	end
 
 	def get_symbol_bind(sym)
@@ -543,15 +580,15 @@ if $0 == __FILE__
 		puts dyn.to_human
 	end
 
-	## Parse and print each symbol
-	d.parse_symbols
+	## Parse and print each dynsym symbol
+	d.parse_dynsym
 	d.symbols.each do |sym|
-		puts sprintf("%s %s 0x%08x %d %s\n", d.get_symbol_type(sym), d.get_symbol_bind(sym), sym.st_value.to_i, sym.st_size.to_i, d.get_symbol_name(sym));
+		puts sprintf("%s %s 0x%08x %d %s\n", d.get_symbol_type(sym), d.get_symbol_bind(sym), sym.st_value.to_i, sym.st_size.to_i, d.get_dyn_symbol_name(sym));
 	end
 
-	## The parse_symbols method can
-	## optionally take a block
-	d.parse_symbols do |sym|
-		puts sprintf("%s %s 0x%08x %d %s\n", d.get_symbol_type(sym), d.get_symbol_bind(sym), sym.st_value.to_i, sym.st_size.to_i, d.get_symbol_name(sym));
+	## The parse_symtab and parse_dynsym
+	## methods can optionally take a block
+	d.parse_symtab do |sym|
+		puts sprintf("%s %s 0x%08x %d %s\n", d.get_symbol_type(sym), d.get_symbol_bind(sym), sym.st_value.to_i, sym.st_size.to_i, d.get_sym_symbol_name(sym));
 	end
 end
