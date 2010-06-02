@@ -1,3 +1,9 @@
-RElf is a class for parsing ELF (Executable Linkable Format) in Ruby. It uses http://github.com/tqbf/ruckus
+RElf is a class for parsing ELF (Executable Linkable Format) in Ruby. 
+
+It uses Ruckus:
+
+http://github.com/tduehr/ruckus
+or the old tqbf one
+http://github.com/tqbf/ruckus
 
 It's maybe 1/2 done - YMMV
