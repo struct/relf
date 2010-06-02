@@ -158,7 +158,7 @@ class RELF
 
     def parse_dyn
         p = get_phdr(PhdrTypes::PT_DYNAMIC)
-        return nil if not p
+        return if not p
 
         dynamic_section_offset = p.p_vaddr.to_i
 
@@ -248,26 +248,17 @@ class RELF
       end
       sym      
     end
-            #  # retrieve the PLT now
-        #  addr = jmprel
-        #  while addr < jmprel + pltrelsz:
-        #    rel = Elf32Rel( kip.mem[addr : addr+ 8] )
-        #    name = kip.lookup_rel(rel, symtab, strtab)
-        #    val = struct.unpack("<L",kip.mem[rel.r_offset: rel.r_offset +4])[0]-6
-        #    #print "Func plt_%s @ %x"%(name, val)
-        #    f = func() ; f.name = name; f.start_addr = val
-        #    f.module = "libXTODOX" #TODO: linkmap
-        #    kip.functions.append(f)
-        #    addr += 8
 
     def parse_dynsym
-        d = get_shdr(ShdrTypes::SHT_DYNSYM)
+       d = get_shdr(ShdrTypes::SHT_DYNSYM)
 
-        if !d.kind_of? ELFSectionHeader
-            d = @dynsym
-        end
+       if !d.kind_of? ELFSectionHeader
+          d = @dynsym
+       end
 
-       num_of_symbols = (d.sh_size.to_i / @syment)
+       return if not d
+
+       num_of_symbols = (d.sh_size.to_i / ELFSymbol.new.size)
        #num_of_symbols = dat[@hash.sh_offset + 4]
 
         0.upto(num_of_symbols.to_i-1) do |j|
@@ -289,12 +280,12 @@ class RELF
         @symtab = get_shdr(ShdrTypes::SHT_SYMTAB)
 
         if !@symtab.kind_of? ELFSectionHeader
-            return nil
+            return
         end
 
         @sym_str_tbl = shdr[@symtab.sh_link.to_i]
 
-        num_of_symbols = (@symtab.sh_size.to_i / @syment)
+        num_of_symbols = (@symtab.sh_size.to_i / (ELFSymbol.new).size)
         #num_of_symbols = dat[hash.sh_offset + 4]
 
         0.upto(num_of_symbols.to_i-1) do |j|
@@ -616,7 +607,7 @@ if $0 == __FILE__
     d.dyn.each do |dyn|
         puts dyn.to_human
     end
-    
+
     ## Parse and print each dynsym symbol
     d.parse_dynsym
     d.symbols.each do |sym|
