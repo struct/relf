@@ -25,12 +25,12 @@
 ##  - Methods between ruPE and rELF should be uniform and
 ##    have similar return values (arrays vs strings vs ruckus structures)
 ##  - Parse more ELF structures (relocations etc...)
-
+require 'rubygems'
 require 'ruckus'
 
 class RELF
 
-    attr_accessor :dat, :ehdr, :phdr, :shdr, :dyn, :strtab, :hash, :gnu_hash, :dynsym, :symtab, :syment, :symbols
+    attr_accessor :dat, :ehdr, :phdr, :shdr, :dyn, :strtab, :hash, :gnu_hash, :jmprel, :dynsym, :symtab, :syment, :symbols, :reloc
 
     def initialize(elf_file)
         begin   
@@ -44,6 +44,7 @@ class RELF
         @phdr = Array.new
         @shdr = Array.new
         @dyn  = Array.new
+        @reloc  = Array.new
         @symbols = Array.new
 
         parse_ehdr
@@ -75,7 +76,8 @@ class RELF
             if p.p_type.to_i == type
                 return p
             end
-        end
+        end        
+        nil
     end
 
     def get_phdr_name(phdr)
@@ -140,6 +142,7 @@ class RELF
                 return s
             end
         end
+        nil
     end
 
     def get_shdr_name(shdr)
@@ -155,14 +158,19 @@ class RELF
 
     def parse_dyn
         p = get_phdr(PhdrTypes::PT_DYNAMIC)
+        if not p
+          return nil
+        end
         dynamic_section_offset = p.p_vaddr.to_i
 
-        d = ELFDynamic.new
+        d = ELFDynamic.new       
         @strtab = ELFSectionHeader.new
         @hash = ELFSectionHeader.new
         @gnu_hash = ELFSectionHeader.new
         @dynsym = ELFSectionHeader.new
+        @jmprel = ELFSectionHeader.new
         @syment = 0
+        @pltrelsz = 0
 
         0.upto(p.p_filesz.to_i / d.size.to_i) do |j|
             d = ELFDynamic.new
@@ -173,44 +181,31 @@ class RELF
                 break
             end
 
+            exec_type = 1 if ehdr.e_type.to_i == ELFTypes::ET_EXEC
+            dyna_type = 1 if ehdr.e_type.to_i == ELFTypes::ET_DYN
+            
               case d.d_tag.to_i
                 when DynamicTypes::DT_STRTAB
-                    if ehdr.e_type.to_i == ELFTypes::ET_EXEC
-                        strtab.sh_offset = d.d_val.to_i - BASEADDR
-                    end
-                    if ehdr.e_type.to_i == ELFTypes::ET_DYN
-                        strtab.sh_offset = d.d_val.to_i
-                    end
-
+                  strtab.sh_offset = d.d_val.to_i - BASEADDR if exec_type
+                  strtab.sh_offset = d.d_val.to_i if dyna_type
                 when DynamicTypes::DT_SYMENT
-                    @syment = d.d_val.to_i
-
+                  @syment = d.d_val.to_i
                 when DynamicTypes::DT_HASH
-                    if ehdr.e_type.to_i == ELFTypes::ET_EXEC
-                        hash.sh_offset = d.d_val.to_i - BASEADDR
-                    end
-                    if ehdr.e_type.to_i == ELFTypes::ET_DYN
-                        hash.sh_offset = d.d_val.to_i
-                    end
-
-                    @dynsym_sym_count = dat[hash.sh_offset + 4, 4].unpack('V')[0]
-
+                  hash.sh_offset = d.d_val.to_i - BASEADDR if exec_type
+                  hash.sh_offset = d.d_val.to_i if dyna_type
                 when DynamicTypes::DT_GNU_HASH
-                    if ehdr.e_type.to_i == ELFTypes::ET_EXEC
-                        gnu_hash.sh_offset = d.d_val.to_i - BASEADDR
-                    end
-                    if ehdr.e_type.to_i == ELFTypes::ET_DYN
-                        gnu_hash.sh_offset = d.d_val.to_i
-                    end
-
+                  gnu_hash.sh_offset = d.d_val.to_i - BASEADDR if exec_type
+                  gnu_hash.sh_offset = d.d_val.to_i if dyna_type
                 when DynamicTypes::DT_SYMTAB
-                    if ehdr.e_type.to_i == ELFTypes::ET_EXEC
-                        dynsym.sh_offset = d.d_val.to_i - BASEADDR
-                    end
-                    if ehdr.e_type.to_i == ELFTypes::ET_DYN
-                        dynsym.sh_offset = d.d_val.to_i
-                    end
+                  dynsym.sh_offset = d.d_val.to_i - BASEADDR if exec_type
+                  dynsym.sh_offset = d.d_val.to_i if dyna_type
+                when DynamicTypes::DT_PLTRELSZ
+                  @pltrelsz = d.d_val.to_i
+                when DynamicTypes::DT_JMPREL
+                  jmprel.sh_offset = d.d_val.to_i - BASEADDR if exec_type
+                  jmprel.sh_offset = d.d_val.to_i if dyna_type
             end # case statement
+
 
             dyn.push(d)
         end
@@ -224,20 +219,62 @@ class RELF
         end
     end
 
+    def parse_reloc
+        p = get_phdr(PhdrTypes::PT_DYNAMIC)
+        unless not p        
+          #parse the dynamic relocations
+          reloc = @reloc
+          f = get_file
+          tr = ELFRelocation.new
+          0.upto((@pltrelsz-1) / tr.size) do |j|
+            r = ELFRelocation.new
+            r.capture(f[jmprel.sh_offset.to_i + j*tr.size, tr.size])
+            symbols.push(lookup_rel(r))
+            reloc.push(r) 
+          end
+        else
+          puts "[-] No PT_DYANMIC phdr entry. (static binary)"        
+        end    
+    end
+    
+    def lookup_rel(r)
+      r_type = r.r_info & 0xff
+      pos = r.r_info >> 8
+      addr = r.r_offset
+      f = get_file
+      sym = ELFSymbol.new
+      sym.capture(f[dynsym.sh_offset.to_i + (pos * sym.size), sym.size])
+      if 0 == sym.st_value.to_i
+        sym.st_value = addr
+      end
+      sym      
+    end
+            #  # retrieve the PLT now
+        #  addr = jmprel
+        #  while addr < jmprel + pltrelsz:
+        #    rel = Elf32Rel( kip.mem[addr : addr+ 8] )
+        #    name = kip.lookup_rel(rel, symtab, strtab)
+        #    val = struct.unpack("<L",kip.mem[rel.r_offset: rel.r_offset +4])[0]-6
+        #    #print "Func plt_%s @ %x"%(name, val)
+        #    f = func() ; f.name = name; f.start_addr = val
+        #    f.module = "libXTODOX" #TODO: linkmap
+        #    kip.functions.append(f)
+        #    addr += 8
+
     def parse_dynsym
+        d = get_shdr(ShdrTypes::SHT_DYNSYM)
 
-        if @dynsym.sh_offset == 0
-            @dynsym = get_shdr(ShdrTypes::SHT_DYNSYM)
+        if !d.kind_of? ELFSectionHeader
+            d = @dynsym
         end
 
-        if @dynsym_sym_count == 0
-            @dynsym_sym_count = (@dynsym.sh_size / @syment)
-        end
+       num_of_symbols = (d.sh_size.to_i / @syment)
+       #num_of_symbols = dat[@hash.sh_offset + 4]
 
-        0.upto(@dynsym_sym_count-1) do |j|
+        0.upto(num_of_symbols.to_i-1) do |j|
             sym = ELFSymbol.new
             f = get_file
-            sym.capture(f[dynsym.sh_offset.to_i + (j * sym.size), sym.size])
+            sym.capture(f[d.sh_offset.to_i + (j * sym.size), sym.size])
             f = get_file
             str = f[strtab.sh_offset.to_i + sym.st_name.to_i, 256]
 
@@ -259,6 +296,7 @@ class RELF
         @sym_str_tbl = shdr[@symtab.sh_link.to_i]
 
         num_of_symbols = (@symtab.sh_size.to_i / @syment)
+        #num_of_symbols = dat[hash.sh_offset + 4]
 
         0.upto(num_of_symbols.to_i-1) do |j|
             sym = ELFSymbol.new
