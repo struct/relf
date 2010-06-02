@@ -174,13 +174,14 @@ class RELF
             end
 
               case d.d_tag.to_i
-                    when DynamicTypes::DT_STRTAB
+                when DynamicTypes::DT_STRTAB
                     if ehdr.e_type.to_i == ELFTypes::ET_EXEC
                         strtab.sh_offset = d.d_val.to_i - BASEADDR
                     end
                     if ehdr.e_type.to_i == ELFTypes::ET_DYN
                         strtab.sh_offset = d.d_val.to_i
                     end
+
                 when DynamicTypes::DT_SYMENT
                     @syment = d.d_val.to_i
 
@@ -192,6 +193,8 @@ class RELF
                         hash.sh_offset = d.d_val.to_i
                     end
 
+                    @dynsym_sym_count = dat[hash.sh_offset + 4, 4].unpack('V')[0]
+
                 when DynamicTypes::DT_GNU_HASH
                     if ehdr.e_type.to_i == ELFTypes::ET_EXEC
                         gnu_hash.sh_offset = d.d_val.to_i - BASEADDR
@@ -199,6 +202,7 @@ class RELF
                     if ehdr.e_type.to_i == ELFTypes::ET_DYN
                         gnu_hash.sh_offset = d.d_val.to_i
                     end
+
                 when DynamicTypes::DT_SYMTAB
                     if ehdr.e_type.to_i == ELFTypes::ET_EXEC
                         dynsym.sh_offset = d.d_val.to_i - BASEADDR
@@ -221,19 +225,15 @@ class RELF
     end
 
     def parse_dynsym
-        d = get_shdr(ShdrTypes::SHT_DYNSYM)
 
-        if !d.kind_of? ELFSectionHeader
-            d = @dynsym
+        if @dynsym.sh_offset == 0
+            @dynsym = get_shdr(ShdrTypes::SHT_DYNSYM)
         end
 
-       num_of_symbols = (d.sh_size.to_i / @syment)
-       #num_of_symbols = dat[@hash.sh_offset + 4]
-
-        0.upto(num_of_symbols.to_i-1) do |j|
+        0.upto(@dynsym_sym_count-1) do |j|
             sym = ELFSymbol.new
             f = get_file
-            sym.capture(f[d.sh_offset.to_i + (j * sym.size), sym.size])
+            sym.capture(f[dynsym.sh_offset.to_i + (j * sym.size), sym.size])
             f = get_file
             str = f[strtab.sh_offset.to_i + sym.st_name.to_i, 256]
 
@@ -255,7 +255,6 @@ class RELF
         @sym_str_tbl = shdr[@symtab.sh_link.to_i]
 
         num_of_symbols = (@symtab.sh_size.to_i / @syment)
-        #num_of_symbols = dat[hash.sh_offset + 4]
 
         0.upto(num_of_symbols.to_i-1) do |j|
             sym = ELFSymbol.new
