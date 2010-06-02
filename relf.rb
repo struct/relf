@@ -51,6 +51,7 @@ class RELF
         parse_phdr
         parse_dyn
         parse_shdr
+        
     end
 
     def get_file
@@ -127,9 +128,9 @@ class RELF
             f = get_file
             s.capture(f[ehdr.e_shoff.to_i + (ehdr.e_shentsize.to_i * j), ehdr.e_shentsize.to_i])
 
-            if s.sh_type.to_i == ShdrTypes::SHT_STRTAB
+            if s.sh_type.to_i == ShdrTypes::SHT_STRTAB and j == ehdr.e_shstrndx.to_i
                 @shstrtab = ELFSectionHeader.new
-                shstrtab = s
+                shstrtab = @shstrtab = s
             end
 
             shdr.push(s)
@@ -151,6 +152,7 @@ class RELF
         if dyn.size == 0
             parse_dyn
         end
+        
 
         str = f[@shstrtab.sh_offset.to_i + shdr.sh_name.to_i, 256]
         str = str[0, str.index("\x00")]
