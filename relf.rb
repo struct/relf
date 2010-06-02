@@ -230,6 +230,10 @@ class RELF
             @dynsym = get_shdr(ShdrTypes::SHT_DYNSYM)
         end
 
+        if @dynsym_sym_count == 0
+            @dynsym_sym_count = (@dynsym.sh_size / @syment)
+        end
+
         0.upto(@dynsym_sym_count-1) do |j|
             sym = ELFSymbol.new
             f = get_file
