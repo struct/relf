@@ -158,9 +158,8 @@ class RELF
 
     def parse_dyn
         p = get_phdr(PhdrTypes::PT_DYNAMIC)
-        if not p
-          return nil
-        end
+        return nil if not p
+
         dynamic_section_offset = p.p_vaddr.to_i
 
         d = ELFDynamic.new       
@@ -223,13 +222,13 @@ class RELF
         p = get_phdr(PhdrTypes::PT_DYNAMIC)
         unless not p        
           #parse the dynamic relocations
-          reloc = @reloc
           f = get_file
           tr = ELFRelocation.new
           0.upto((@pltrelsz-1) / tr.size) do |j|
             r = ELFRelocation.new
             r.capture(f[jmprel.sh_offset.to_i + j*tr.size, tr.size])
-            symbols.push(lookup_rel(r))
+            # TODO: merge with existing symbols? symbols.push(lookup_rel(r))
+            # should parse_reloc become part of somethign else?
             reloc.push(r) 
           end
         else
@@ -290,7 +289,7 @@ class RELF
         @symtab = get_shdr(ShdrTypes::SHT_SYMTAB)
 
         if !@symtab.kind_of? ELFSectionHeader
-            return
+            return nil
         end
 
         @sym_str_tbl = shdr[@symtab.sh_link.to_i]
@@ -617,7 +616,7 @@ if $0 == __FILE__
     d.dyn.each do |dyn|
         puts dyn.to_human
     end
-
+    
     ## Parse and print each dynsym symbol
     d.parse_dynsym
     d.symbols.each do |sym|
@@ -628,5 +627,12 @@ if $0 == __FILE__
     ## methods can optionally take a block
     d.parse_symtab do |sym|
         puts sprintf("%s %s 0x%08x %d %s\n", d.get_symbol_type(sym), d.get_symbol_bind(sym), sym.st_value.to_i, sym.st_size.to_i, d.get_sym_symbol_name(sym));
+    end
+    
+    ## Parse the relocation entires for dynamic executables
+    d.parse_reloc
+    d.reloc.each do |r|
+      sym = d.lookup_rel(r)
+      puts sprintf("RELOC: %s %s 0x%08x %d %s\n", d.get_symbol_type(sym), d.get_symbol_bind(sym), sym.st_value.to_i, sym.st_size.to_i, d.get_dyn_symbol_name(sym));
     end
 end
