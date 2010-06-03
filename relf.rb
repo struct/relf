@@ -131,8 +131,8 @@ class RELF
             s.capture(f[ehdr.e_shoff.to_i + (ehdr.e_shentsize.to_i * j), ehdr.e_shentsize.to_i])
 
             if s.sh_type.to_i == ShdrTypes::SHT_STRTAB and j == ehdr.e_shstrndx.to_i
-                shstrtab = ELFSectionHeader.new
-                @shstrtab = shstrtab = s
+                @shstrtab = ELFSectionHeader.new
+                shstrtab = s
             end
 
             shdr.push(s)
