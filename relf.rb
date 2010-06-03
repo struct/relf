@@ -52,6 +52,8 @@ class RELF
         parse_dyn
         parse_shdr
         
+        parse_dynsym
+        parse_reloc
     end
 
     def get_file
@@ -129,8 +131,8 @@ class RELF
             s.capture(f[ehdr.e_shoff.to_i + (ehdr.e_shentsize.to_i * j), ehdr.e_shentsize.to_i])
 
             if s.sh_type.to_i == ShdrTypes::SHT_STRTAB and j == ehdr.e_shstrndx.to_i
-                @shstrtab = ELFSectionHeader.new
-                shstrtab = @shstrtab = s
+                shstrtab = ELFSectionHeader.new
+                @shstrtab = shstrtab = s
             end
 
             shdr.push(s)
@@ -231,6 +233,20 @@ class RELF
             r.capture(f[jmprel.sh_offset.to_i + j*tr.size, tr.size])
             # TODO: merge with existing symbols? symbols.push(lookup_rel(r))
             # should parse_reloc become part of somethign else?
+            
+            #s is a temporary ElfSymbol
+            #check to see if it already exists by name
+            s = lookup_rel(r)
+            sym = get_symbol_by_name( get_dyn_symbol_name(s) )
+            if not sym
+              symbols.push(s)
+            else
+              #if the symbol already exists, and it doesnt have an address
+              # set the relocation info to point to the plt address
+              if 0 == sym.st_value.to_i
+                sym.st_value = s.st_value
+              end
+            end
             reloc.push(r) 
           end
         else
@@ -250,7 +266,7 @@ class RELF
       end
       sym      
     end
-
+   
     def parse_dynsym
        d = get_shdr(ShdrTypes::SHT_DYNSYM)
 
@@ -303,6 +319,16 @@ class RELF
 
             symbols.push(sym)
         end
+    end
+
+    def get_symbol_by_name(name)
+      symbols.each do |s|
+        if get_dyn_symbol_name(s) == name
+          return s
+        end
+      end
+      
+      nil
     end
 
     def get_dyn_symbol_name(sym)
@@ -610,8 +636,7 @@ if $0 == __FILE__
         puts dyn.to_human
     end
 
-    ## Parse and print each dynsym symbol
-    d.parse_dynsym
+    ## Print each dynsym symbol
     d.symbols.each do |sym|
         puts sprintf("%s %s 0x%08x %d %s\n", d.get_symbol_type(sym), d.get_symbol_bind(sym), sym.st_value.to_i, sym.st_size.to_i, d.get_dyn_symbol_name(sym));
     end
@@ -623,7 +648,6 @@ if $0 == __FILE__
     end
     
     ## Parse the relocation entires for dynamic executables
-    d.parse_reloc
     d.reloc.each do |r|
       sym = d.lookup_rel(r)
       puts sprintf("RELOC: %s %s 0x%08x %d %s\n", d.get_symbol_type(sym), d.get_symbol_bind(sym), sym.st_value.to_i, sym.st_size.to_i, d.get_dyn_symbol_name(sym));
