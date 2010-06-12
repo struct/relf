@@ -30,7 +30,8 @@ require 'ruckus'
 
 class RELF
 
-    attr_accessor :dat, :ehdr, :phdr, :shdr, :dyn, :strtab, :hash, :gnu_hash, :jmprel, :dynsym, :symtab, :syment, :symbols, :reloc
+    attr_accessor :dat, :ehdr, :phdr, :shdr, :dyn, :strtab, :hash, :gnu_hash, :jmprel, :rel,
+                  :dynsym, :symtab, :syment, :dynsym_symbols, :symtab_symbols, :reloc
 
     def initialize(elf_file)
         begin   
@@ -45,15 +46,13 @@ class RELF
         @shdr = Array.new
         @dyn  = Array.new
         @reloc  = Array.new
-        @symbols = Array.new
+        @dynsym_symbols = Array.new
+        @symtab_symbols = Array.new
 
         parse_ehdr
         parse_phdr
         parse_dyn
         parse_shdr
-        
-        parse_dynsym
-        parse_reloc
     end
 
     def get_file
@@ -172,8 +171,10 @@ class RELF
         @gnu_hash = ELFSectionHeader.new
         @dynsym = ELFSectionHeader.new
         @jmprel = ELFSectionHeader.new
+        @rel = ELFSectionHeader.new
         @syment = 0
         @pltrelsz = 0
+        @relsz = 0
 
         0.upto(p.p_filesz.to_i / d.size.to_i) do |j|
             d = ELFDynamic.new
@@ -189,31 +190,37 @@ class RELF
             
               case d.d_tag.to_i
                 when DynamicTypes::DT_STRTAB
-                  strtab.sh_offset = d.d_val.to_i - BASEADDR if exec_type
-                  strtab.sh_offset = d.d_val.to_i if dyna_type
+                  @strtab.sh_offset = d.d_val.to_i - BASEADDR if exec_type
+                  @strtab.sh_offset = d.d_val.to_i if dyna_type
                 when DynamicTypes::DT_SYMENT
                   @syment = d.d_val.to_i
                 when DynamicTypes::DT_HASH
-                  hash.sh_offset = d.d_val.to_i - BASEADDR if exec_type
-                  hash.sh_offset = d.d_val.to_i if dyna_type
+                  @hash.sh_offset = d.d_val.to_i - BASEADDR if exec_type
+                  @hash.sh_offset = d.d_val.to_i if dyna_type
+                  @dynsym_sym_count = dat[hash.sh_offset + 4, 4].unpack('V')[0]
                 when DynamicTypes::DT_GNU_HASH
-                  gnu_hash.sh_offset = d.d_val.to_i - BASEADDR if exec_type
-                  gnu_hash.sh_offset = d.d_val.to_i if dyna_type
+                  @gnu_hash.sh_offset = d.d_val.to_i - BASEADDR if exec_type
+                  @gnu_hash.sh_offset = d.d_val.to_i if dyna_type
                 when DynamicTypes::DT_SYMTAB
-                  dynsym.sh_offset = d.d_val.to_i - BASEADDR if exec_type
-                  dynsym.sh_offset = d.d_val.to_i if dyna_type
+                  @dynsym.sh_offset = d.d_val.to_i - BASEADDR if exec_type
+                  @dynsym.sh_offset = d.d_val.to_i if dyna_type
                 when DynamicTypes::DT_PLTRELSZ
                   @pltrelsz = d.d_val.to_i
+                when DynamicTypes::DT_RELSZ
+                  @relsz = d.d_val.to_i
                 when DynamicTypes::DT_JMPREL
-                  jmprel.sh_offset = d.d_val.to_i - BASEADDR if exec_type
-                  jmprel.sh_offset = d.d_val.to_i if dyna_type
-            end # case statement
-
+                  @jmprel.sh_offset = d.d_val.to_i - BASEADDR if exec_type
+                  @jmprel.sh_offset = d.d_val.to_i if dyna_type
+                when DynamicTypes::DT_REL
+                  @rel.sh_offset = d.d_val.to_i - BASEADDR if exec_type
+                  @rel.sh_offset = d.d_val.to_i if dyna_type
+            end
 
             dyn.push(d)
         end
     end
 
+    ## Unused method
     def get_dyn(type)
         dyn.each do |d|
             if d.d_tag.to_i == type
@@ -222,35 +229,47 @@ class RELF
         end
     end
 
-    def parse_reloc
+    def parse_reloc(&block)
+        parse_rel(@rel, @relsz, &block)
+        parse_rel(@jmprel, @pltrelsz, &block)
+    end
+
+    def parse_rel(rel_loc, sz)
         p = get_phdr(PhdrTypes::PT_DYNAMIC)
-        unless not p        
+        unless not p
           #parse the dynamic relocations
           f = get_file
           tr = ELFRelocation.new
-          0.upto((@pltrelsz-1) / tr.size) do |j|
+
+          0.upto((sz.to_i-1) / tr.size) do |j|
             r = ELFRelocation.new
-            r.capture(f[jmprel.sh_offset.to_i + j*tr.size, tr.size])
+            r.capture(f[rel_loc.sh_offset.to_i + j*tr.size, tr.size])
             # TODO: merge with existing symbols? symbols.push(lookup_rel(r))
             # should parse_reloc become part of somethign else?
             
             #s is a temporary ElfSymbol
             #check to see if it already exists by name
             s = lookup_rel(r)
-            sym = get_symbol_by_name( get_dyn_symbol_name(s) )
+            sym = get_symbol_by_name(get_dyn_symbol_name(s))
+
+            #if the symbol already exists, and it doesnt have an address
+            # set the relocation info to point to the plt address
             if not sym
-              symbols.push(s)
+              @dynsym_symbols.push(s)
             else
-              #if the symbol already exists, and it doesnt have an address
-              # set the relocation info to point to the plt address
               if 0 == sym.st_value.to_i
                 sym.st_value = s.st_value
               end
             end
+
+            if block_given?
+                yield(r)
+            end
+
             reloc.push(r) 
           end
         else
-          puts "[-] No PT_DYANMIC phdr entry. (static binary)"        
+          puts "[-] No PT_DYNAMIC phdr entry. (static binary)"        
         end    
     end
     
@@ -261,10 +280,11 @@ class RELF
       f = get_file
       sym = ELFSymbol.new
       sym.capture(f[dynsym.sh_offset.to_i + (pos * sym.size), sym.size])
+
       if 0 == sym.st_value.to_i
         sym.st_value = addr
       end
-      sym      
+      sym
     end
    
     def parse_dynsym
@@ -276,10 +296,7 @@ class RELF
 
        return if not d
 
-       num_of_symbols = (d.sh_size.to_i / ELFSymbol.new.size)
-       #num_of_symbols = dat[@hash.sh_offset + 4]
-
-        0.upto(num_of_symbols.to_i-1) do |j|
+        0.upto(@dynsym_sym_count-1) do |j|
             sym = ELFSymbol.new
             f = get_file
             sym.capture(f[d.sh_offset.to_i + (j * sym.size), sym.size])
@@ -290,7 +307,7 @@ class RELF
                 yield(sym)
             end
 
-            symbols.push(sym)
+            @dynsym_symbols.push(sym)
         end
     end
 
@@ -303,10 +320,9 @@ class RELF
 
         @sym_str_tbl = shdr[@symtab.sh_link.to_i]
 
-        num_of_symbols = (@symtab.sh_size.to_i / (ELFSymbol.new).size)
-        #num_of_symbols = dat[hash.sh_offset + 4]
+        @symtab_sym_count = (@symtab.sh_size.to_i / (ELFSymbol.new).size)
 
-        0.upto(num_of_symbols.to_i-1) do |j|
+        0.upto(@symtab_sym_count.to_i-1) do |j|
             sym = ELFSymbol.new
             f = get_file
             sym.capture(f[@symtab.sh_offset.to_i + (j * sym.size), sym.size])
@@ -317,17 +333,23 @@ class RELF
                 yield(sym)
             end
 
-            symbols.push(sym)
+            @symtab_symbols.push(sym)
         end
     end
 
     def get_symbol_by_name(name)
-      symbols.each do |s|
+      @dynsym_symbols.each do |s|
         if get_dyn_symbol_name(s) == name
           return s
         end
       end
-      
+
+      @symtab_symbols.each do |s|
+        if get_sym_symbol_name(s) == name
+            return s
+        end
+      end
+
       nil
     end
 
@@ -636,20 +658,28 @@ if $0 == __FILE__
         puts dyn.to_human
     end
 
-    ## Print each dynsym symbol
-    d.symbols.each do |sym|
+    ## The parse_symtab and parse_dynsym
+    ## methods can optionally take a block
+    d.parse_dynsym do |sym|
+        puts sprintf("DYNSYM: %s %s 0x%08x %d %s\n", d.get_symbol_type(sym), d.get_symbol_bind(sym), sym.st_value.to_i, sym.st_size.to_i, d.get_dyn_symbol_name(sym));
+    end
+
+    d.parse_symtab do |sym|
+        puts sprintf("SYMTAB: %s %s 0x%08x %d %s\n", d.get_symbol_type(sym), d.get_symbol_bind(sym), sym.st_value.to_i, sym.st_size.to_i, d.get_sym_symbol_name(sym));
+    end
+
+    ## Parse the relocation entires for dynamic executables
+    d.parse_reloc do |r|
+      sym = d.lookup_rel(r)
+      puts sprintf("RELOC: %s %s 0x%08x %d %s\n", d.get_symbol_type(sym), d.get_symbol_bind(sym), sym.st_value.to_i, sym.st_size.to_i, d.get_dyn_symbol_name(sym));
+    end
+
+    ## Print each symbol collected by parse_dynsym and parse_symtab
+    d.dynsym_symbols.each do |sym|
         puts sprintf("%s %s 0x%08x %d %s\n", d.get_symbol_type(sym), d.get_symbol_bind(sym), sym.st_value.to_i, sym.st_size.to_i, d.get_dyn_symbol_name(sym));
     end
 
-    ## The parse_symtab and parse_dynsym
-    ## methods can optionally take a block
-    d.parse_symtab do |sym|
+    d.symtab_symbols.each do |sym|
         puts sprintf("%s %s 0x%08x %d %s\n", d.get_symbol_type(sym), d.get_symbol_bind(sym), sym.st_value.to_i, sym.st_size.to_i, d.get_sym_symbol_name(sym));
-    end
-    
-    ## Parse the relocation entires for dynamic executables
-    d.reloc.each do |r|
-      sym = d.lookup_rel(r)
-      puts sprintf("RELOC: %s %s 0x%08x %d %s\n", d.get_symbol_type(sym), d.get_symbol_bind(sym), sym.st_value.to_i, sym.st_size.to_i, d.get_dyn_symbol_name(sym));
     end
 end
