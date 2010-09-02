@@ -153,7 +153,6 @@ class RELF
         if dyn.size == 0
             parse_dyn
         end
-puts @shstrtab.inspect
         str = f[@shstrtab.sh_offset.to_i + shdr.sh_name.to_i, 256]
         str = str[0, str.index("\x00")]
     end
