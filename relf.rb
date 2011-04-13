@@ -30,13 +30,14 @@ require 'ruckus'
 
 class RELF
 
-    attr_accessor :dat, :ehdr, :phdr, :shdr, :dyn, :strtab, :hash, :gnu_hash, :jmprel, :rel,
+    attr_accessor :elf, :ehdr, :phdr, :shdr, :dyn, :strtab, :hash, :gnu_hash, :jmprel, :rel,
                   :dynsym, :symtab, :syment, :dynsym_symbols, :symtab_symbols, :reloc
 
     def initialize(elf_file)
         begin   
             @elf_file = elf_file
-            @dat = File.read(elf_file)
+            @elf = File.read(elf_file)
+            @elf.freeze
         rescue
             puts "Could not read [ #{elf_file} ]"
             exit
@@ -49,26 +50,24 @@ class RELF
         @dynsym_symbols = Array.new
         @symtab_symbols = Array.new
 
+        @dynsym_sym_count = 0
+        @symtab_sym_count = 0
+
         parse_ehdr
         parse_phdr
         parse_dyn
         parse_shdr
     end
 
-    def get_file
-        @dat.dup
-    end
-
     def parse_ehdr
         @ehdr = ELFHeader.new
-        ehdr.capture(get_file)
+        ehdr.capture(@elf)
     end
 
     def parse_phdr
         0.upto(ehdr.e_phnum.to_i-1) do |j|
             p = ELFProgramHeader.new
-            f = get_file
-            p.capture f[ehdr.e_phoff.to_i + (ehdr.e_phentsize.to_i * j), ehdr.e_phentsize.to_i]
+            p.capture @elf[ehdr.e_phoff.to_i + (ehdr.e_phentsize.to_i * j), ehdr.e_phentsize.to_i]
             phdr.push(p)
         end
     end
@@ -126,8 +125,7 @@ class RELF
     def parse_shdr
         0.upto(ehdr.e_shnum.to_i-1) do |j|
             s = ELFSectionHeader.new
-            f = get_file
-            s.capture(f[ehdr.e_shoff.to_i + (ehdr.e_shentsize.to_i * j), ehdr.e_shentsize.to_i])
+            s.capture(@elf[ehdr.e_shoff.to_i + (ehdr.e_shentsize.to_i * j), ehdr.e_shentsize.to_i])
 
             if s.sh_type.to_i == ShdrTypes::SHT_STRTAB and j == ehdr.e_shstrndx.to_i
                 @shstrtab = ELFSectionHeader.new
@@ -148,12 +146,11 @@ class RELF
     end
 
     def get_shdr_name(shdr)
-        f = get_file
 
         if dyn.size == 0
             parse_dyn
         end
-        str = f[@shstrtab.sh_offset.to_i + shdr.sh_name.to_i, 256]
+        str = @elf[@shstrtab.sh_offset.to_i + shdr.sh_name.to_i, 256]
         str = str[0, str.index("\x00")]
     end
 
@@ -176,8 +173,7 @@ class RELF
 
         0.upto(p.p_filesz.to_i / d.size.to_i) do |j|
             d = ELFDynamic.new
-            f = get_file
-            d.capture(f[p.p_offset.to_i + (d.size.to_i * j), d.size.to_i])
+            d.capture(@elf[p.p_offset.to_i + (d.size.to_i * j), d.size.to_i])
 
             if d.d_tag.to_i == DynamicTypes::DT_NULL
                 break
@@ -195,7 +191,7 @@ class RELF
                 when DynamicTypes::DT_HASH
                   @hash.sh_offset = d.d_val.to_i - BASEADDR if exec_type
                   @hash.sh_offset = d.d_val.to_i if dyna_type
-                  @dynsym_sym_count = dat[hash.sh_offset + 4, 4].unpack('V')[0]
+                  @dynsym_sym_count = @elf[hash.sh_offset + 4, 4].unpack('V')[0]
                 when DynamicTypes::DT_GNU_HASH
                   @gnu_hash.sh_offset = d.d_val.to_i - BASEADDR if exec_type
                   @gnu_hash.sh_offset = d.d_val.to_i if dyna_type
@@ -236,12 +232,11 @@ class RELF
         p = get_phdr(PhdrTypes::PT_DYNAMIC)
         unless not p
           #parse the dynamic relocations
-          f = get_file
           tr = ELFRelocation.new
 
           0.upto((sz.to_i-1) / tr.size) do |j|
             r = ELFRelocation.new
-            r.capture(f[rel_loc.sh_offset.to_i + j*tr.size, tr.size])
+            r.capture(@elf[rel_loc.sh_offset.to_i + j*tr.size, tr.size])
             # TODO: merge with existing symbols? symbols.push(lookup_rel(r))
             # should parse_reloc become part of somethign else?
             
@@ -275,9 +270,8 @@ class RELF
       r_type = r.r_info & 0xff
       pos = r.r_info >> 8
       addr = r.r_offset
-      f = get_file
       sym = ELFSymbol.new
-      sym.capture(f[dynsym.sh_offset.to_i + (pos * sym.size), sym.size])
+      sym.capture(@elf[dynsym.sh_offset.to_i + (pos * sym.size), sym.size])
 
       if 0 == sym.st_value.to_i
         sym.st_value = addr
@@ -294,12 +288,10 @@ class RELF
 
        return if not d
 
-        0.upto(@dynsym_sym_count-1) do |j|
+        0.upto(@dynsym_sym_count.to_i-1) do |j|
             sym = ELFSymbol.new
-            f = get_file
-            sym.capture(f[d.sh_offset.to_i + (j * sym.size), sym.size])
-            f = get_file
-            str = f[strtab.sh_offset.to_i + sym.st_name.to_i, 256]
+            sym.capture(@elf[d.sh_offset.to_i + (j * sym.size), sym.size])
+            str = @elf[strtab.sh_offset.to_i + sym.st_name.to_i, 256]
 
             if block_given?
                 yield(sym)
@@ -322,10 +314,8 @@ class RELF
 
         0.upto(@symtab_sym_count.to_i-1) do |j|
             sym = ELFSymbol.new
-            f = get_file
-            sym.capture(f[@symtab.sh_offset.to_i + (j * sym.size), sym.size])
-            f = get_file
-            str = f[@sym_str_tbl.sh_offset.to_i + sym.st_name.to_i, 256]
+            sym.capture(@elf[@symtab.sh_offset.to_i + (j * sym.size), sym.size])
+            str = @elf[@sym_str_tbl.sh_offset.to_i + sym.st_name.to_i, 256]
 
             if block_given?
                 yield(sym)
@@ -352,14 +342,12 @@ class RELF
     end
 
     def get_dyn_symbol_name(sym)
-        f = get_file
-        str = f[strtab.sh_offset.to_i + sym.st_name.to_i, 256]
+        str = @elf[strtab.sh_offset.to_i + sym.st_name.to_i, 256]
         str = str[0, str.index("\x00")]
     end
 
     def get_sym_symbol_name(sym)
-        f = get_file
-        str = f[@sym_str_tbl.sh_offset.to_i + sym.st_name.to_i, 256]
+        str = @elf[@sym_str_tbl.sh_offset.to_i + sym.st_name.to_i, 256]
         str = str[0, str.index("\x00")]
     end
 
