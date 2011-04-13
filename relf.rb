@@ -61,7 +61,7 @@ class RELF
 
     def parse_ehdr
         @ehdr = ELFHeader.new
-        ehdr.capture(@elf)
+        ehdr.capture(@elf.dup)
     end
 
     def parse_phdr
